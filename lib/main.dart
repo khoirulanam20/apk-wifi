@@ -170,6 +170,11 @@ class _WebShellState extends State<WebShell> {
     }
   }
 
+  Future<void> _handleRefresh() async {
+    setState(() => _progress = 0);
+    await _controller.reload();
+  }
+
   @override
   Widget build(BuildContext context) {
     return PopScope(
@@ -177,11 +182,17 @@ class _WebShellState extends State<WebShell> {
       onPopInvokedWithResult: _onPopInvoked,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('SWF'),
-          centerTitle: true,
-          backgroundColor: const Color(0xFF0D9488),
-          foregroundColor: Colors.white,
+          toolbarHeight: 40,
+          backgroundColor: Colors.white,
           elevation: 2,
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.refresh, size: 22),
+              color: const Color(0xFF0D9488),
+              onPressed: _handleRefresh,
+              padding: const EdgeInsets.all(8),
+            ),
+          ],
         ),
         body: Column(
           children: [
@@ -192,7 +203,9 @@ class _WebShellState extends State<WebShell> {
                 backgroundColor: Colors.grey[200],
                 color: const Color(0xFF0D9488),
               ),
-            Expanded(child: WebViewWidget(controller: _controller)),
+            Expanded(
+              child: WebViewWidget(controller: _controller),
+            ),
           ],
         ),
       ),
