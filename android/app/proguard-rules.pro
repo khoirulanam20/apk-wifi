@@ -23,6 +23,9 @@
     native <methods>;
 }
 
+# SwipeRefreshLayout
+-keep class androidx.swiperefreshlayout.widget.SwipeRefreshLayout { *; }
+
 # Google Play Core (untuk split APK support)
 -dontwarn com.google.android.play.core.splitcompat.SplitCompatApplication
 -dontwarn com.google.android.play.core.splitinstall.SplitInstallException

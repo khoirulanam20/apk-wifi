@@ -12,6 +12,9 @@ import 'package:webview_flutter_android/webview_flutter_android.dart';
 /// URL aplikasi web SWF.
 const String kAppUrl = 'https://protika.desaverse.id/login';
 
+// Method channel untuk native Android features
+const MethodChannel _nativeChannel = MethodChannel('com.bintangkecil.swf/native');
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const SwfWebApp());
@@ -45,10 +48,24 @@ class _WebShellState extends State<WebShell> {
   late final WebViewController _controller;
   late final NavigationDelegate _navigationDelegate;
   double _progress = 0;
+  bool _isRefreshing = false;
+  bool _isAtTop = true;
 
   @override
   void initState() {
     super.initState();
+    
+    // Setup method channel listener untuk refresh dari native
+    _nativeChannel.setMethodCallHandler((call) async {
+      if (call.method == 'onRefresh' && mounted) {
+        setState(() {
+          _isRefreshing = true;
+          _progress = 0;
+        });
+        await _controller.reload();
+      }
+    });
+    
     _navigationDelegate = NavigationDelegate(
       onProgress: (int value) {
         if (!mounted) return;
@@ -56,13 +73,31 @@ class _WebShellState extends State<WebShell> {
         final newProgress = value / 100.0;
         if ((newProgress - _progress).abs() > 0.1 || newProgress == 1.0) {
           setState(() => _progress = newProgress);
+          // Hide refresh indicator when done
+          if (newProgress == 1.0 && _isRefreshing) {
+            setState(() => _isRefreshing = false);
+            // Notify native that refresh is complete
+            _nativeChannel.invokeMethod('refreshComplete');
+          }
         }
       },
+      onPageFinished: (_) {
+        _injectScrollListener();
+      },
     );
+    
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(Colors.white)
       ..setNavigationDelegate(_navigationDelegate)
+      ..addJavaScriptChannel('ScrollChannel', onMessageReceived: (message) {
+        final scrollY = int.tryParse(message.message) ?? 0;
+        final isAtTop = scrollY <= 0;
+        if (isAtTop != _isAtTop) {
+          _isAtTop = isAtTop;
+          _nativeChannel.invokeMethod('updateScrollState', {'isAtTop': isAtTop});
+        }
+      })
       ..loadRequest(Uri.parse(kAppUrl));
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -77,6 +112,7 @@ class _WebShellState extends State<WebShell> {
     final platform = _controller.platform;
     if (platform is AndroidWebViewController) {
       await platform.setOnShowFileSelector(_androidFileSelector);
+      
       // Optimasi WebView Android
       await platform.setMediaPlaybackRequiresUserGesture(false);
       await platform.setGeolocationPermissionsPromptCallbacks(
@@ -87,6 +123,21 @@ class _WebShellState extends State<WebShell> {
           );
         },
       );
+      
+      // Tunggu sampai frame benar-benar rendered
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        // Delay tambahan untuk memastikan view hierarchy sudah stabil
+        await Future.delayed(const Duration(milliseconds: 1000));
+        
+        // Enable pull-to-refresh via native channel
+        try {
+          debugPrint('Calling enablePullToRefresh...');
+          final result = await _nativeChannel.invokeMethod('enablePullToRefresh');
+          debugPrint('enablePullToRefresh result: $result');
+        } catch (e) {
+          debugPrint('Pull-to-refresh error: $e');
+        }
+      });
     }
   }
 
@@ -170,8 +221,24 @@ class _WebShellState extends State<WebShell> {
     }
   }
 
+  Future<void> _injectScrollListener() async {
+    await _controller.runJavaScript('''
+(function() {
+  var scrollY = window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop || 0;
+  ScrollChannel.postMessage(scrollY.toString());
+  window.addEventListener('scroll', function() {
+    ScrollChannel.postMessage((window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop || 0).toString());
+  }, { passive: true });
+})();
+''');
+  }
+
   Future<void> _handleRefresh() async {
-    setState(() => _progress = 0);
+    if (_isRefreshing) return;
+    setState(() {
+      _isRefreshing = true;
+      _progress = 0;
+    });
     await _controller.reload();
   }
 
@@ -185,18 +252,26 @@ class _WebShellState extends State<WebShell> {
           toolbarHeight: 40,
           backgroundColor: Colors.white,
           elevation: 2,
+          title: GestureDetector(
+            onDoubleTap: _handleRefresh,
+            child: Container(
+              height: 40,
+              color: Colors.transparent,
+            ),
+          ),
           actions: [
             IconButton(
               icon: const Icon(Icons.refresh, size: 22),
               color: const Color(0xFF0D9488),
               onPressed: _handleRefresh,
               padding: const EdgeInsets.all(8),
+              tooltip: 'Refresh',
             ),
           ],
         ),
         body: Column(
           children: [
-            if (_progress < 1.0)
+            if (_progress < 1.0 || _isRefreshing)
               LinearProgressIndicator(
                 value: _progress > 0 ? _progress : null,
                 minHeight: 3,
