@@ -94,6 +94,11 @@ class MainActivity : FlutterActivity() {
                     }
                     
                     setOnRefreshListener {
+                        if (canChildScrollUp) {
+                            Log.d(TAG, "Pull-to-refresh ignored: not at top")
+                            isRefreshing = false
+                            return@setOnRefreshListener
+                        }
                         Log.d(TAG, "Pull-to-refresh triggered")
                         isRefreshing = true
                         methodChannel?.invokeMethod("onRefresh", null)

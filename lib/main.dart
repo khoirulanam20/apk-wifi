@@ -58,6 +58,10 @@ class _WebShellState extends State<WebShell> {
     // Setup method channel listener untuk refresh dari native
     _nativeChannel.setMethodCallHandler((call) async {
       if (call.method == 'onRefresh' && mounted) {
+        if (!_isAtTop) {
+          await _nativeChannel.invokeMethod('refreshComplete');
+          return;
+        }
         setState(() {
           _isRefreshing = true;
           _progress = 0;
@@ -91,12 +95,8 @@ class _WebShellState extends State<WebShell> {
       ..setBackgroundColor(Colors.white)
       ..setNavigationDelegate(_navigationDelegate)
       ..addJavaScriptChannel('ScrollChannel', onMessageReceived: (message) {
-        final scrollY = int.tryParse(message.message) ?? 0;
-        final isAtTop = scrollY <= 0;
-        if (isAtTop != _isAtTop) {
-          _isAtTop = isAtTop;
-          _nativeChannel.invokeMethod('updateScrollState', {'isAtTop': isAtTop});
-        }
+        final isAtTop = message.message == '1';
+        _reportScrollState(isAtTop);
       })
       ..loadRequest(Uri.parse(kAppUrl));
 
@@ -221,14 +221,43 @@ class _WebShellState extends State<WebShell> {
     }
   }
 
+  Future<void> _reportScrollState(bool isAtTop) async {
+    if (isAtTop == _isAtTop) return;
+    _isAtTop = isAtTop;
+    if (!Platform.isAndroid) return;
+    await _nativeChannel.invokeMethod('updateScrollState', {'isAtTop': isAtTop});
+  }
+
   Future<void> _injectScrollListener() async {
     await _controller.runJavaScript('''
 (function() {
-  var scrollY = window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop || 0;
-  ScrollChannel.postMessage(scrollY.toString());
-  window.addEventListener('scroll', function() {
-    ScrollChannel.postMessage((window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop || 0).toString());
-  }, { passive: true });
+  if (window.__swfScrollListenerInstalled) return;
+  window.__swfScrollListenerInstalled = true;
+
+  function getScrollOffset() {
+    var y = window.pageYOffset
+      || document.documentElement.scrollTop
+      || document.body.scrollTop
+      || 0;
+    if (y > 0) return y;
+
+    var nodes = document.querySelectorAll(
+      'html, body, main, [role="main"], [data-scroll], .overflow-auto, .overflow-y-auto, .overflow-scroll, .overflow-y-scroll'
+    );
+    for (var i = 0; i < nodes.length; i++) {
+      if (nodes[i].scrollTop > y) y = nodes[i].scrollTop;
+    }
+    return y;
+  }
+
+  function reportScroll() {
+    var atTop = getScrollOffset() <= 0;
+    ScrollChannel.postMessage(atTop ? '1' : '0');
+  }
+
+  reportScroll();
+  document.addEventListener('scroll', reportScroll, { capture: true, passive: true });
+  window.addEventListener('resize', reportScroll, { passive: true });
 })();
 ''');
   }
