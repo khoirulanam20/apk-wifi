@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 
@@ -88,7 +89,19 @@ class _WebShellState extends State<WebShell> {
       },
       onNavigationRequest: (request) async {
         if (_isDownloadUrl(request.url)) {
-          await _startUrlDownload(request.url);
+          await _startUrlDownload(request.url, filename: _exportFilename(request.url));
+          return NavigationDecision.prevent;
+        }
+        // Link eksternal (mis. Google Maps) dibuka di aplikasi luar; WebView tidak
+        // bisa menangani redirect geo:/intent: dan menampilkan error.
+        final uri = Uri.tryParse(request.url);
+        if (uri != null && uri.host != Uri.parse(kAppUrl).host) {
+          try {
+            await launchUrl(uri, mode: LaunchMode.externalApplication);
+          } catch (e) {
+            debugPrint('Launch external error: $e');
+            _showDownloadSnackBar('Tidak dapat membuka tautan');
+          }
           return NavigationDecision.prevent;
         }
         return NavigationDecision.navigate;
@@ -133,9 +146,10 @@ class _WebShellState extends State<WebShell> {
       await platform.setMediaPlaybackRequiresUserGesture(false);
       await platform.setGeolocationPermissionsPromptCallbacks(
         onShowPrompt: (request) async {
+          final status = await Permission.locationWhenInUse.request();
           return GeolocationPermissionsResponse(
-            allow: true,
-            retain: true,
+            allow: status.isGranted,
+            retain: status.isGranted,
           );
         },
       );
@@ -257,11 +271,16 @@ class _WebShellState extends State<WebShell> {
     if (query.contains('download=1') || query.contains('force_download')) {
       return true;
     }
-    if (path.contains('/export') &&
-        (path.contains('pdf') || uri.queryParameters['format'] == 'pdf')) {
-      return true;
-    }
+    if (path.contains('/export')) return true;
     return false;
+  }
+
+  /// Endpoint /export tanpa ekstensi: pdf jika format=pdf, selain itu Excel.
+  String? _exportFilename(String url) {
+    final uri = Uri.tryParse(url);
+    if (uri == null || !uri.path.contains('/export')) return null;
+    final isPdf = uri.queryParameters['format'] == 'pdf' || uri.path.contains('pdf');
+    return isPdf ? 'export.pdf' : 'export.xlsx';
   }
 
   String _filenameFromUrl(String url, {String fallback = 'download.pdf'}) {
